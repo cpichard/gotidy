@@ -1,16 +1,18 @@
+//
 package main
 
-import "fmt"
-import "log"
-
-import "os"
-import "io"
-import "path"
-import "io/ioutil"
-
-import "crypto/sha256"
-import "sync"
-import "flag"
+import (
+	"crypto/sha256"
+	"flag"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
+	"os"
+	"path"
+	"strings"
+	"sync"
+)
 
 //import "strings"
 
@@ -55,7 +57,7 @@ func hashFile(filePath string) {
 	}
 }
 
-func scanDirs(rootDir string) {
+func scanOneDirectory(rootDir string) {
 	defer wgScanDir.Done()
 	defer func() { <-concurrentScanQueue }()
 
@@ -73,12 +75,12 @@ func scanDirs(rootDir string) {
 			go hashFile(filePath)
 		} else if file.Mode().IsDir() {
 			wgScanDir.Add(1)
-			go scanDirs(filePath)
+			go scanOneDirectory(filePath)
 		}
 	}
 }
 
-func printKeyValue(key, values interface{}) bool {
+func printMultipleValues(key, values interface{}) bool {
 	found := values.([]string)
 	if len(found) > 1 {
 		fmt.Printf("key:%x\n", key)
@@ -89,10 +91,51 @@ func printKeyValue(key, values interface{}) bool {
 	return true
 }
 
+func showDeletable(rootDir string, key, values interface{}) bool {
+	found := values.([]string)
+	if len(found) > 1 {
+		var isInRoot = false
+		for _, v := range found {
+			// Search for entry in the rootDir
+
+			if strings.HasPrefix(v, rootDir) {
+				isInRoot = true
+				break
+			}
+		}
+
+		if isInRoot == true {
+			for _, v := range found {
+				// Search for entry in the rootDir
+				if !strings.HasPrefix(v, rootDir) {
+					fmt.Printf("%s\n", v)
+					// os.Remove(v)
+				}
+			}
+		}
+	}
+	return true
+}
+
+func scanDirectories(rootDir string) {
+	fmt.Println(rootDir)
+	wgScanDir.Add(1)
+	go scanOneDirectory(rootDir)
+
+	wgScanDir.Wait()
+	wgProcessFile.Wait()
+}
+
+var rootDir string
+var diffDir string
+
+func init() {
+	flag.StringVar(&rootDir, "dir", "", "root dir of the scan")
+	flag.StringVar(&diffDir, "compare", "", "dir to compare with")
+}
+
 func main() {
 	// Look for all files
-	var rootDir string
-	flag.StringVar(&rootDir, "dir", "", "root dir of the scan")
 	flag.Parse()
 	if rootDir == "" {
 		cwDir, err := os.Getwd()
@@ -101,13 +144,14 @@ func main() {
 		}
 		rootDir = cwDir
 	}
-	fmt.Println(rootDir)
-	wgScanDir.Add(1)
-	go scanDirs(rootDir)
+	scanDirectories(rootDir)
 
-	wgScanDir.Wait()
-	fmt.Printf("All directories parsed\n")
-	wgProcessFile.Wait()
-	// iterate over key values
-	shaes2.Range(printKeyValue)
+	if diffDir != "" {
+		scanDirectories(diffDir)
+		shaes2.Range(func(key, values interface{}) bool { return showDeletable(rootDir, key, values) })
+	} else {
+		// iterate over key values
+		shaes2.Range(printMultipleValues)
+	}
+
 }
